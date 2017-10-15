@@ -1,0 +1,15 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    eventmachine (1.2.5)
+    http_parser.rb (0.5.3)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  eventmachine
+  http_parser.rb
+
+BUNDLED WITH
+   1.16.0.pre.2
