@@ -3,11 +3,13 @@
 # TCPSocket represents a TCP/IP client socket.
 require 'socket'
 require 'http/parser'
+require 'stringio'
 
 class Crystal
   # 通过 port 号建立一个 TCPServer socket
-  def initialize(port)
+  def initialize(port, app)
     @server = TCPServer.new(port)
+    @app = app
   end
 
   def start
@@ -15,7 +17,7 @@ class Crystal
     loop do
       # 服务器端开始接受连接
       socket = @server.accept
-      connection = Connection.new(socket)
+      connection = Connection.new(socket, @app)
       connection.process
       # 返回响应之后连接会断开
       # 要保持连接用 loop 块
@@ -23,8 +25,9 @@ class Crystal
   end
 
   class Connection
-    def initialize(socket)
+    def initialize(socket, app)
       @socket = socket
+      @app = app
       @parser = Http::Parser.new(self)
     end
 
@@ -42,15 +45,38 @@ class Crystal
     def on_message_complete
       puts "#{@parser.http_method} #{@parser.request_path}"
       puts "   " + @parser.headers.inspect
-      send_response
+      puts
+
+      env = {}
+      @parser.headers.each do |name, value|
+        name = "HTTP_" + name.upcase.tr("_","-")
+        env[name] = value
+      end
+      env["PATH_INFO"] = @parser.request_path
+      env["REQUEST_METHOD"] = @parser.http_method
+      env["rack.input"] = StringIO.new
+      send_response env
     end
 
+    REASONS = {
+      200 => "OK",
+      404 => "NOT FOUND"
+    }
     # 因为可能有 another one？
-    def send_response
-      @socket.write "HTTP/1.1 200 OK\r\n"
+    def send_response(env)
+      status, headers, body = @app.call(env)
+      reason = REASONS[status]
       # "\r\n" 一般一起用，表示键盘上的回车键
+      @socket.write "HTTP/1.1 #{status} #{reason}\r\n"
+      headers.each_pair do |name, value|
+        @socket.write "#{name}: #{value}\r\n"
+      end
       @socket.write "\r\n"
-      @socket.write "hello\n"
+      body.each do |chunk|
+        @socket.write chunk
+      end
+      body.close if body.respond_to? :close
+
       close
     end
 
@@ -60,6 +86,19 @@ class Crystal
   end
 end
 
-server = Crystal.new(3000)
+class App
+  def call(env)
+
+    message = "Hello from the #{Process.pid}.\n"
+    [
+      200,
+      { 'Content-Type' => 'text/plain', 'Content-Length' => message.size.to_s },
+      [message]
+    ]
+  end
+end
+
+app = App.new
+server = Crystal.new(3000, app)
 puts "Plugging crystal into port 3000"
 server.start
