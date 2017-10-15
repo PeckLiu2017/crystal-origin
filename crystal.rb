@@ -4,6 +4,7 @@
 require 'socket'
 require 'http/parser'
 require 'stringio'
+require 'thread'
 
 class Crystal
   # 通过 port 号建立一个 TCPServer socket
@@ -12,13 +13,25 @@ class Crystal
     @app = app
   end
 
+  def prefork(workers)
+    workers.times do
+      fork do
+        puts "Forked #{Process.pid}"
+        start
+      end
+    end
+    Process.waitall
+  end
+
   def start
     # loop 一直保持连接
     loop do
       # 服务器端开始接受连接
       socket = @server.accept
-      connection = Connection.new(socket, @app)
-      connection.process
+      Thread.new do
+        connection = Connection.new(socket, @app)
+        connection.process
+      end
       # 返回响应之后连接会断开
       # 要保持连接用 loop 块
     end
@@ -41,11 +54,11 @@ class Crystal
       end
     end
 
-    # 一旦 request 被收到的回调函数
+    # 一旦 request 被收到执行回调函数
     def on_message_complete
-      puts "#{@parser.http_method} #{@parser.request_path}"
-      puts "   " + @parser.headers.inspect
-      puts
+      # puts "#{@parser.http_method} #{@parser.request_path}"
+      # puts "   " + @parser.headers.inspect
+      # puts
 
       env = {}
       @parser.headers.each do |name, value|
@@ -75,6 +88,7 @@ class Crystal
       body.each do |chunk|
         @socket.write chunk
       end
+
       body.close if body.respond_to? :close
 
       close
@@ -84,21 +98,29 @@ class Crystal
       @socket.close
     end
   end
-end
 
-class App
-  def call(env)
+  # 重构 class App
+  class Builder
+    attr_reader :app
 
-    message = "Hello from the #{Process.pid}.\n"
-    [
-      200,
-      { 'Content-Type' => 'text/plain', 'Content-Length' => message.size.to_s },
-      [message]
-    ]
+    def run(app)
+      @app = app
+    end
+
+    def self.parse_file(file)
+      content = File.read(file)
+      builder = self.new
+      # 从这里开始执行 file 中的程序
+      # 运行 run 方法
+      builder.instance_eval(content)
+      builder.app
+    end
   end
+
 end
 
-app = App.new
+app = Crystal::Builder.parse_file('config.ru')
 server = Crystal.new(3000, app)
 puts "Plugging crystal into port 3000"
-server.start
+# server.start
+server.prefork(3)
